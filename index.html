@@ -334,7 +334,8 @@ h1{font-size:1.5rem;line-height:1.2;margin:0;font-weight:500;color:var(--text)}
 .fin-box-label { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 2px; }
 .fin-box-val { font-weight: 600; font-size: 1rem; }
 
-.summary-row { display: flex; justify-content: space-between; padding: 8px 12px; background: var(--surface-alt); border-radius: var(--radius-md); margin-bottom: 12px; font-weight: 500; font-size: 0.9rem;}
+.summary-row { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--surface-alt); border-radius: var(--radius-md); margin-bottom: 12px; font-weight: 500; font-size: 0.9rem;}
+.summary-line { display: flex; justify-content: space-between; width: 100%; }
 .debt-row { display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
 .debt-row:last-child { border-bottom: none; }
 .debt-amt { font-weight: 600; font-size: 0.95rem; }
@@ -451,6 +452,9 @@ function applyBg(){
   }
 }
 
+// ==========================================
+// ОПТИМИЗИРОВАННЫЙ АЛГОРИТМ ИЗВЛЕЧЕНИЯ ЦВЕТА
+// ==========================================
 function processBackgroundColor(bgDataUrl) {
   const img = new Image();
   img.onload = () => {
@@ -469,21 +473,37 @@ function processBackgroundColor(bgDataUrl) {
         const r = data[i], g = data[i+1], b = data[i+2];
         rSum += r; gSum += g; bSum += b; count++;
 
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
-        const l = (max + min) / 2 / 255;
-        const s = max === min ? 0 : (max - min) / (max + min > 255 ? 2 - (max + min) / 255 : (max + min) / 255);
+        let rN = r/255, gN = g/255, bN = b/255;
+        let max = Math.max(rN, gN, bN), min = Math.min(rN, gN, bN);
+        let h, s, l = (max + min) / 2;
+        
+        if (max === min) { h = s = 0; } 
+        else {
+          let d = max - min;
+          s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+          switch (max) {
+            case rN: h = (gN - bN) / d + (gN < bN ? 6 : 0); break;
+            case gN: h = (bN - rN) / d + 2; break;
+            case bN: h = (rN - gN) / d + 4; break;
+          }
+          h /= 6;
+        }
 
-        if (l > 0.2 && l < 0.8 && s > 0.3) {
+        if (s > 0.4 && l > 0.2 && l < 0.8) {
           const score = s * (1 - Math.abs(l - 0.5) * 2); 
           if (score > maxScore) {
             maxScore = score;
-            bestColor = { r, g, b };
+            bestColor = { r, g, b, h: h * 360, s: s * 100, l: l * 100 };
           }
         }
       }
 
-      if (!bestColor) bestColor = { r: Math.round(rSum/count), g: Math.round(gSum/count), b: Math.round(bSum/count) };
+      if (!bestColor) {
+        bestColor = { 
+          r: Math.round(rSum/count), g: Math.round(gSum/count), b: Math.round(bSum/count),
+          h: 0, s: 0, l: ((rSum+count/2)/count + (gSum+count/2)/count + (bSum+count/2)/count) / 765 * 100
+        };
+      }
       
       state.extractedColor = bestColor;
       save(); applyAccentColor();
@@ -495,35 +515,42 @@ function processBackgroundColor(bgDataUrl) {
 function applyAccentColor() {
   if (!state || !state.extractedColor) { resetAccentColor(); return; }
   
-  let { r, g, b } = state.extractedColor;
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  let finalR = r, finalG = g, finalB = b;
+  let { h, s, l } = state.extractedColor;
+  s = Math.max(s, 65); 
   
-  if (state.theme === 'dark') {
-    if (lum < 0.4) {
-      const factor = 0.5 / Math.max(lum, 0.1);
-      finalR = Math.min(255, Math.round(r * factor));
-      finalG = Math.min(255, Math.round(g * factor));
-      finalB = Math.min(255, Math.round(b * factor));
-    }
-  } else {
-    if (lum > 0.6) {
-      const factor = 0.5 / Math.max(lum, 0.1);
-      finalR = Math.round(r * factor);
-      finalG = Math.round(g * factor);
-      finalB = Math.round(b * factor);
-    }
-  }
+  if (state.theme === 'dark') { l = 65; } else { l = 45; }
 
-  const hex = '#' + [finalR, finalG, finalB].map(x => x.toString(16).padStart(2, '0')).join('');
+  let hN = h / 360, sN = s / 100, lN = l / 100;
+  const hue2rgb = (p, q, t) => {
+    if(t < 0) t += 1; if(t > 1) t -= 1;
+    if(t < 1/6) return p + (q - p) * 6 * t;
+    if(t < 1/2) return q;
+    if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  let r, g, b;
+  if(sN === 0) { r = g = b = lN; } 
+  else {
+    let q = lN < 0.5 ? lN * (1 + sN) : lN + sN - lN * sN;
+    let p = 2 * lN - q;
+    r = hue2rgb(p, q, hN + 1/3); g = hue2rgb(p, q, hN); b = hue2rgb(p, q, hN - 1/3);
+  }
+  
+  const toHex = x => { const hex = Math.round(x * 255).toString(16); return hex.length === 1 ? '0' + hex : hex; };
+  const hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  const rgbStr = `${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)}`;
+
   document.documentElement.style.setProperty('--accent', hex);
-  document.documentElement.style.setProperty('--accent-glow', `rgba(${finalR}, ${finalG}, ${finalB}, 0.25)`);
+  document.documentElement.style.setProperty('--accent-glow', `rgba(${rgbStr}, 0.25)`);
+  document.documentElement.style.setProperty('--accent-fg', state.theme === 'dark' ? '#1a1a1a' : '#ffffff');
   
-  const finalLum = (0.299 * finalR + 0.587 * finalG + 0.114 * finalB) / 255;
-  document.documentElement.style.setProperty('--accent-fg', finalLum > 0.5 ? '#1a1a1a' : '#ffffff');
+  const darkL = Math.max(0, l - 15);
+  let q2 = darkL/100 < 0.5 ? (darkL/100) * (1 + sN) : (darkL/100) + sN - (darkL/100) * sN;
+  let p2 = 2 * (darkL/100) - q2;
+  let r2 = hue2rgb(p2, q2, hN + 1/3), g2 = hue2rgb(p2, q2, hN), b2 = hue2rgb(p2, q2, hN - 1/3);
+  const hex2 = `#${toHex(r2)}${toHex(g2)}${toHex(b2)}`;
   
-  const darkR = Math.max(0, finalR - 30), darkG = Math.max(0, finalG - 30), darkB = Math.max(0, finalB - 30);
-  document.documentElement.style.setProperty('--accent-grad', `linear-gradient(135deg, ${hex} 0%, rgb(${darkR}, ${darkG}, ${darkB}) 100%)`);
+  document.documentElement.style.setProperty('--accent-grad', `linear-gradient(135deg, ${hex} 0%, ${hex2} 100%)`);
 }
 
 function resetAccentColor() {
@@ -842,15 +869,18 @@ function viewFinance(){
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   }).reduce((sum, e) => sum + e.amount, 0);
 
-  const debtsOwedToMe = state.debts.filter(d => !d.isPaid && d.type === 'owed_to_me').reduce((sum, d) => sum + d.amount, 0);
-  const debtsIOwe = state.debts.filter(d => !d.isPaid && d.type === 'i_owe').reduce((sum, d) => sum + d.amount, 0);
+  const debtsOwedToMePerson = state.debts.filter(d => !d.isPaid && d.type === 'owed_to_me' && (!d.entity || d.entity === 'person')).reduce((sum, d) => sum + d.amount, 0);
+  const debtsIOwePerson = state.debts.filter(d => !d.isPaid && d.type === 'i_owe' && (!d.entity || d.entity === 'person')).reduce((sum, d) => sum + d.amount, 0);
+  const debtsIOweBank = state.debts.filter(d => !d.isPaid && d.type === 'i_owe' && d.entity === 'bank').reduce((sum, d) => sum + d.amount, 0);
   
   const upcoming = state.payments.filter(p => !p.isPaid).sort((a,b) => a.date.localeCompare(b.date));
-  const nextPayment = upcoming.length ? upcoming[0] : null;
+  const nextPayments = upcoming.slice(0, 3);
+  const recentExp = state.expenses.slice(0, 20);
 
   return `
   <div class="page-head"><h1>Финансы</h1></div>
 
+  <!-- ДАШБОРД -->
   <div class="finance-dashboard">
     <div class="fin-grid" style="margin-top:0;">
       <div class="fin-box" style="background:transparent; border:1px solid var(--border);">
@@ -862,56 +892,102 @@ function viewFinance(){
         <div class="fin-box-val">${totalMonth.toLocaleString('ru-RU')} ₽</div>
       </div>
     </div>
-    
-    <div class="fin-grid">
-      <div class="fin-box">
-        <div class="fin-box-label">Мне должны</div>
-        <div class="fin-box-val positive">+${debtsOwedToMe.toLocaleString('ru-RU')} ₽</div>
-      </div>
-      <div class="fin-box">
-        <div class="fin-box-label">Я должен</div>
-        <div class="fin-box-val negative">-${debtsIOwe.toLocaleString('ru-RU')} ₽</div>
-      </div>
-    </div>
 
-    ${nextPayment ? `
-      <div class="fin-box" style="margin-top: 8px;">
-        <div class="fin-box-label">Ближайший платеж</div>
-        <div class="fin-row" style="margin-bottom:0; margin-top:4px;">
-          <span style="font-weight:500;">${esc(nextPayment.title)}</span>
-          <span style="font-weight:600; color:var(--accent);">${nextPayment.amount.toLocaleString('ru-RU')} ₽</span>
+    <div class="fin-box" style="margin-top: 8px;">
+      <div class="fin-box-label" style="margin-bottom: 6px;">Ближайшие 3 платежа</div>
+      ${nextPayments.length ? nextPayments.map(p => `
+        <div class="fin-row" style="margin-bottom: 4px;">
+          <span style="font-weight:500; font-size:0.9rem;">${esc(p.title)}</span>
+          <span style="font-weight:600; color:var(--accent); font-size:0.9rem;">${p.amount.toLocaleString('ru-RU')} ₽</span>
         </div>
-        <div class="muted small" style="margin-top:4px;">${new Date(nextPayment.date).toLocaleDateString('ru-RU')}</div>
-      </div>
-    ` : ''}
+        <div class="muted small" style="margin-top:-4px; margin-bottom:6px; font-size:0.7rem;">${new Date(p.date).toLocaleDateString('ru-RU')}</div>
+      `).join('') : `<div class="muted small">Нет предстоящих платежей</div>`}
+    </div>
   </div>
 
-  <div class="sec-title" style="margin-top:0">Траты сегодня</div>
+  <!-- ПОТРАЧЕНО (ДОБАВИТЬ ТРАТУ) -->
+  <div class="sec-title" style="margin-top:0">Потрачено</div>
   
-  <form id="expenseForm" class="inline" style="margin-bottom:var(--space-4)">
-    <input id="expenseAmount" type="number" inputmode="numeric" placeholder="Сумма ₽">
-    <select id="expenseCategory" class="sel" style="flex:1;">
-      ${state.financeCategories.map(c => `<option value="${c.id}">${c.emoji} ${esc(c.name)}</option>`).join('')}
-    </select>
-    <button class="btn">+</button>
+  <form id="expenseForm" class="inline" style="margin-bottom:var(--space-4); gap:8px;">
+    <div style="display:flex; gap:8px; width:100%;">
+      <input id="expenseAmount" type="number" inputmode="numeric" placeholder="Сумма ₽" style="flex:1;">
+      <select id="expenseCategory" class="sel" style="flex:2;">
+        ${state.financeCategories.map(c => `<option value="${c.id}">${c.emoji} ${esc(c.name)}</option>`).join('')}
+      </select>
+      <button class="btn">+</button>
+    </div>
+    <input id="expenseComment" placeholder="Комментарий (необязательно)" style="width:100%; margin-top:4px;" autocomplete="off">
   </form>
 
+  <!-- ИСТОРИЯ ТРАТ -->
+  <div class="sec-title">История трат</div>
+
   <div class="card" style="padding:var(--space-2) var(--space-4); margin-bottom:var(--space-4);">
-    ${todayExp.length ? todayExp.map(e => {
+    ${recentExp.length ? recentExp.map(e => {
       const cat = state.financeCategories.find(c => c.id === e.categoryId) || {emoji:'❓', name:'Другое'};
+      const dateStr = new Date(e.date).toLocaleDateString('ru-RU', {day:'numeric', month:'short'});
       return `
       <div class="row" style="padding:var(--space-2) 0;">
         <div class="row-ico">${cat.emoji}</div>
         <div class="row-main">
-          <div class="row-title">${esc(cat.name)}</div>
-          <div class="muted small">${new Date(e.date).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}</div>
+          <div class="row-title">${esc(cat.name)} ${e.comment ? `<span class="muted small">— ${esc(e.comment)}</span>` : ''}</div>
+          <div class="muted small">${dateStr}, ${new Date(e.date).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}</div>
         </div>
         <div style="font-weight:500;">${e.amount.toLocaleString('ru-RU')} ₽</div>
         <button class="x" data-act="exp-del" data-id="${e.id}">×</button>
       </div>`;
-    }).join('') : `<div class="empty">Трат за сегодня нет</div>`}
+    }).join('') : `<div class="empty">Трат пока нет</div>`}
   </div>
 
+  <!-- ДОЛГИ -->
+  <div class="sec-title">Долги</div>
+
+  <div class="summary-row">
+    <div class="summary-line">
+      <span>Мне должны (люди):</span>
+      <span class="positive">+${debtsOwedToMePerson.toLocaleString('ru-RU')} ₽</span>
+    </div>
+    <div class="summary-line">
+      <span>Я должен (люди):</span>
+      <span class="negative">-${debtsIOwePerson.toLocaleString('ru-RU')} ₽</span>
+    </div>
+    <div class="summary-line">
+      <span>Я должен (банки):</span>
+      <span class="negative">-${debtsIOweBank.toLocaleString('ru-RU')} ₽</span>
+    </div>
+  </div>
+
+  <form id="debtForm" class="inline" style="margin-bottom:var(--space-4); gap:8px;">
+    <input id="debtName" placeholder="Имя / Название банка" autocomplete="off" style="flex:1 1 100%;">
+    <div style="display:flex; gap:8px; width:100%;">
+      <input id="debtAmount" type="number" inputmode="numeric" placeholder="Сумма" style="flex:1;">
+      <select id="debtType" class="sel" style="flex:1;">
+        <option value="i_owe">Я должен</option>
+        <option value="owed_to_me">Мне должны</option>
+      </select>
+      <select id="debtEntity" class="sel" style="flex:1;">
+        <option value="person">Человек</option>
+        <option value="bank">Банк</option>
+      </select>
+      <button class="btn">+</button>
+    </div>
+  </form>
+
+  <div class="card" style="padding:var(--space-2) var(--space-4); margin-bottom:var(--space-4);">
+    ${state.debts.filter(d => !d.isPaid).length ? state.debts.filter(d => !d.isPaid).map(d => `
+      <div class="row" style="padding:var(--space-2) 0;">
+        <button class="check" data-act="debt-toggle" data-id="${d.id}"></button>
+        <div class="row-main">
+          <div class="row-title">${esc(d.name)}</div>
+          <div class="muted small">${d.type === 'owed_to_me' ? 'Мне должны' : 'Я должен'} (${d.entity === 'bank' ? 'Банк' : 'Человек'})</div>
+        </div>
+        <div class="debt-amt ${d.type === 'owed_to_me' ? 'positive' : 'negative'}">${d.type === 'owed_to_me' ? '+' : '-'}${d.amount.toLocaleString('ru-RU')} ₽</div>
+        <button class="x" data-act="debt-del" data-id="${d.id}">×</button>
+      </div>
+    `).join('') : `<div class="empty">Нет активных долгов</div>`}
+  </div>
+
+  <!-- КАТЕГОРИИ ТРАТ -->
   <div class="sec-title">Категории трат</div>
   <div class="card" style="margin-bottom:var(--space-4);">
     ${state.financeCategories.map(c => `
@@ -931,38 +1007,8 @@ function viewFinance(){
     </div>
   </div>
 
-  <div class="sec-title">Долги</div>
-  
-  <div class="summary-row">
-    <span>Мне должны: <span class="positive">+${debtsOwedToMe.toLocaleString('ru-RU')} ₽</span></span>
-    <span>Я должен: <span class="negative">-${debtsIOwe.toLocaleString('ru-RU')} ₽</span></span>
-  </div>
-
-  <form id="debtForm" class="inline" style="margin-bottom:var(--space-4)">
-    <input id="debtName" placeholder="Кому / Кто" autocomplete="off">
-    <input id="debtAmount" type="number" inputmode="numeric" placeholder="Сумма" style="flex:0 0 80px; text-align:center;">
-    <select id="debtType" class="sel">
-      <option value="owed_to_me">Мне должны</option>
-      <option value="i_owe">Я должен</option>
-    </select>
-    <button class="btn">+</button>
-  </form>
-
-  <div class="card" style="padding:var(--space-2) var(--space-4); margin-bottom:var(--space-4);">
-    ${state.debts.filter(d => !d.isPaid).length ? state.debts.filter(d => !d.isPaid).map(d => `
-      <div class="row" style="padding:var(--space-2) 0;">
-        <button class="check" data-act="debt-toggle" data-id="${d.id}"></button>
-        <div class="row-main">
-          <div class="row-title">${esc(d.name)}</div>
-          <div class="muted small">${d.type === 'owed_to_me' ? 'Мне должны' : 'Я должен'}</div>
-        </div>
-        <div class="debt-amt ${d.type === 'owed_to_me' ? 'positive' : 'negative'}">${d.type === 'owed_to_me' ? '+' : '-'}${d.amount.toLocaleString('ru-RU')} ₽</div>
-        <button class="x" data-act="debt-del" data-id="${d.id}">×</button>
-      </div>
-    `).join('') : `<div class="empty">Нет активных долгов</div>`}
-  </div>
-
-  <div class="sec-title">Ближайшие платежи</div>
+  <!-- ДОБАВЛЕНИЕ ПЛАТЕЖЕЙ -->
+  <div class="sec-title">Добавить платеж</div>
   
   <form id="paymentForm" class="inline" style="margin-bottom:var(--space-4); flex-wrap:wrap; gap:8px;">
     <input id="paymentTitle" placeholder="Название (Кредит, ЖКХ)" autocomplete="off" style="flex:1 1 100%;">
@@ -1049,8 +1095,9 @@ function render(){
   if(ef) ef.onsubmit=e=>{
     e.preventDefault();
     const amt=parseFloat(document.getElementById('expenseAmount').value);
+    const comm=document.getElementById('expenseComment').value.trim();
     if(!amt || amt<=0) return;
-    state.expenses.unshift({id:uid(), amount:amt, categoryId:document.getElementById('expenseCategory').value, date:Date.now()});
+    state.expenses.unshift({id:uid(), amount:amt, categoryId:document.getElementById('expenseCategory').value, date:Date.now(), comment:comm});
     save(); render();
   };
 
@@ -1070,8 +1117,9 @@ function render(){
     const name=document.getElementById('debtName').value.trim();
     const amt=parseFloat(document.getElementById('debtAmount').value);
     const type=document.getElementById('debtType').value;
+    const entity=document.getElementById('debtEntity').value;
     if(!name || !amt || amt<=0) return;
-    state.debts.push({id:uid(), name:name, amount:amt, type:type, isPaid:false});
+    state.debts.push({id:uid(), name:name, amount:amt, type:type, entity:entity, isPaid:false});
     save(); render();
   };
 
